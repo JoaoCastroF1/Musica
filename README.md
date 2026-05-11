@@ -46,6 +46,17 @@ python app.py
 # abre http://localhost:5000
 ```
 
+Healthcheck: `GET /healthz` → `{"status": "ok"}`.
+
+### Docker
+
+```bash
+docker build -t musica .
+docker run --rm -p 5000:5000 musica
+```
+
+A imagem inclui Lilypond, então o PDF é gerado out-of-the-box.
+
 ### Linha de comando
 
 ```bash

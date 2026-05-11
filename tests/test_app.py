@@ -37,6 +37,13 @@ def test_index_renders(client):
     assert b"Musica" in res.data
 
 
+def test_healthz(client):
+    c, _ = client
+    res = c.get("/healthz")
+    assert res.status_code == 200
+    assert res.get_json() == {"status": "ok"}
+
+
 def test_transcribe_missing_file(client):
     c, _ = client
     res = c.post("/api/transcribe", data={})
