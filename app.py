@@ -103,6 +103,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/transcribe", methods=["POST"])
 def api_transcribe():
     if "audio" not in request.files:
