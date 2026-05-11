@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# App artifacts
+uploads/
+output/
+*.mid
+*.midi
+*.musicxml
+*.pdf
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/

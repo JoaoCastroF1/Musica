@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Musica — áudio para partitura</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.7/build/opensheetmusicdisplay.min.js"
+    ></script>
+  </head>
+  <body>
+    <header>
+      <h1>Musica</h1>
+      <p class="tagline">
+        Transcreve áudio em partitura usando o modelo
+        <a
+          href="https://github.com/spotify/basic-pitch"
+          target="_blank"
+          rel="noopener"
+          >Basic Pitch</a
+        >
+        (Spotify) — polifônico, multi-instrumento.
+      </p>
+    </header>
+
+    <main>
+      <section class="card" id="upload-card">
+        <h2>1. Envie o áudio</h2>
+        <form id="upload-form">
+          <label class="dropzone" id="dropzone">
+            <input
+              type="file"
+              name="audio"
+              id="audio-input"
+              accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff"
+              required
+            />
+            <span class="dropzone-label">
+              <strong>Clique</strong> ou arraste um arquivo
+              <span class="hint">WAV · MP3 · FLAC · OGG · M4A · AAC (até 50 MB)</span>
+            </span>
+          </label>
+
+          <details class="advanced">
+            <summary>Parâmetros avançados</summary>
+            <div class="grid">
+              <label>
+                Título
+                <input type="text" name="title" placeholder="Minha música" />
+              </label>
+              <label>
+                Limiar de onset
+                <input
+                  type="number"
+                  name="onset_threshold"
+                  step="0.05"
+                  min="0"
+                  max="1"
+                  value="0.5"
+                />
+                <span class="hint">0–1 · maior = menos notas falsas</span>
+              </label>
+              <label>
+                Limiar de frame
+                <input
+                  type="number"
+                  name="frame_threshold"
+                  step="0.05"
+                  min="0"
+                  max="1"
+                  value="0.3"
+                />
+                <span class="hint">0–1 · maior = sustentação mais curta</span>
+              </label>
+              <label>
+                Duração mínima (ms)
+                <input
+                  type="number"
+                  name="min_note_length_ms"
+                  step="1"
+                  min="10"
+                  value="58"
+                />
+              </label>
+              <label>
+                Frequência mínima (Hz)
+                <input type="number" name="min_freq" step="1" placeholder="auto" />
+              </label>
+              <label>
+                Frequência máxima (Hz)
+                <input type="number" name="max_freq" step="1" placeholder="auto" />
+              </label>
+            </div>
+          </details>
+
+          <button type="submit" id="submit-btn">Transcrever</button>
+        </form>
+      </section>
+
+      <section class="card hidden" id="status-card">
+        <h2>2. Processando</h2>
+        <div id="status-info">
+          <div class="spinner"></div>
+          <span id="status-text">Aguardando…</span>
+        </div>
+      </section>
+
+      <section class="card hidden" id="result-card">
+        <header class="result-header">
+          <h2>3. Resultado</h2>
+          <dl class="stats">
+            <div><dt>Notas</dt><dd id="stat-notes">—</dd></div>
+            <div><dt>Tempo</dt><dd id="stat-tempo">—</dd></div>
+            <div><dt>Duração</dt><dd id="stat-duration">—</dd></div>
+          </dl>
+        </header>
+
+        <div id="osmd-container"></div>
+
+        <div class="downloads">
+          <a id="dl-musicxml" class="btn" hidden>Baixar MusicXML</a>
+          <a id="dl-midi" class="btn" hidden>Baixar MIDI</a>
+          <a id="dl-pdf" class="btn" hidden>Baixar PDF</a>
+        </div>
+
+        <details>
+          <summary>Ver lista de notas detectadas</summary>
+          <div class="note-list" id="note-list"></div>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Transcrição automática não é perfeita: instrumentos com muito vibrato,
+        percussão não-afinada, harmonia densa e ruído de fundo degradam o
+        resultado. Para melhores resultados, use gravações limpas e
+        monoinstrumentais.
+      </p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

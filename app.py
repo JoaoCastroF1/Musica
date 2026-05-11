@@ -1,0 +1,190 @@
+"""Flask app exposing the transcription pipeline as a web service."""
+
+from __future__ import annotations
+
+import logging
+import os
+import secrets
+import threading
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Optional
+
+from flask import Flask, abort, jsonify, render_template, request, send_file
+from werkzeug.utils import secure_filename
+
+from transcribe import TranscriptionResult, transcribe_audio
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+OUTPUT_DIR = BASE_DIR / "output"
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+ALLOWED_EXTENSIONS = {"wav", "mp3", "flac", "ogg", "m4a", "aac", "aiff", "aif"}
+MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("musica")
+
+
+class JobStore:
+    """Thread-safe in-memory job tracker. Good enough for a single-process app."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._jobs: dict[str, dict] = {}
+
+    def create(self, job_id: str, filename: str) -> None:
+        with self._lock:
+            self._jobs[job_id] = {
+                "id": job_id,
+                "status": "pending",
+                "filename": filename,
+                "created_at": time.time(),
+                "error": None,
+                "result": None,
+            }
+
+    def update(self, job_id: str, **fields) -> None:
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id].update(fields)
+
+    def get(self, job_id: str) -> Optional[dict]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return dict(job) if job else None
+
+
+jobs = JobStore()
+
+
+def _allowed(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _run_job(job_id: str, audio_path: Path, title: str, params: dict) -> None:
+    jobs.update(job_id, status="running")
+    try:
+        result: TranscriptionResult = transcribe_audio(
+            audio_path,
+            OUTPUT_DIR,
+            job_id=job_id,
+            title=title,
+            onset_threshold=params.get("onset_threshold", 0.5),
+            frame_threshold=params.get("frame_threshold", 0.3),
+            minimum_note_length_ms=params.get("min_note_length_ms", 58.0),
+            minimum_frequency=params.get("min_freq"),
+            maximum_frequency=params.get("max_freq"),
+        )
+        serializable = asdict(result)
+        for key in ("midi_path", "musicxml_path", "pdf_path"):
+            if serializable.get(key) is not None:
+                serializable[key] = str(serializable[key])
+        jobs.update(job_id, status="done", result=serializable)
+        log.info("job %s done: %d notes", job_id, result.num_notes)
+    except Exception as exc:  # noqa: BLE001 — surface any failure to the user
+        log.exception("job %s failed", job_id)
+        jobs.update(job_id, status="error", error=str(exc))
+    finally:
+        try:
+            audio_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    if "audio" not in request.files:
+        return jsonify({"error": "missing 'audio' file field"}), 400
+    f = request.files["audio"]
+    if not f.filename:
+        return jsonify({"error": "empty filename"}), 400
+    if not _allowed(f.filename):
+        return jsonify(
+            {"error": f"unsupported extension; allowed: {sorted(ALLOWED_EXTENSIONS)}"}
+        ), 400
+
+    job_id = secrets.token_urlsafe(12).replace("-", "_")
+    safe_name = secure_filename(f.filename)
+    ext = safe_name.rsplit(".", 1)[1].lower()
+    audio_path = UPLOAD_DIR / f"{job_id}.{ext}"
+    f.save(audio_path)
+
+    title = request.form.get("title") or Path(safe_name).stem or "Transcribed Score"
+
+    def _float(name: str, default: Optional[float]) -> Optional[float]:
+        raw = request.form.get(name)
+        if raw is None or raw == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    params = {
+        "onset_threshold": _float("onset_threshold", 0.5),
+        "frame_threshold": _float("frame_threshold", 0.3),
+        "min_note_length_ms": _float("min_note_length_ms", 58.0),
+        "min_freq": _float("min_freq", None),
+        "max_freq": _float("max_freq", None),
+    }
+
+    jobs.create(job_id, safe_name)
+    threading.Thread(
+        target=_run_job, args=(job_id, audio_path, title, params), daemon=True
+    ).start()
+
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/job/<job_id>")
+def api_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "unknown job"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/download/<job_id>/<fmt>")
+def api_download(job_id: str, fmt: str):
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "done":
+        abort(404)
+    result = job.get("result") or {}
+
+    mapping = {
+        "midi": (result.get("midi_path"), "audio/midi", f"{job_id}.mid"),
+        "musicxml": (
+            result.get("musicxml_path"),
+            "application/vnd.recordare.musicxml+xml",
+            f"{job_id}.musicxml",
+        ),
+        "pdf": (result.get("pdf_path"), "application/pdf", f"{job_id}.pdf"),
+    }
+    if fmt not in mapping:
+        abort(400)
+    path, mime, download_name = mapping[fmt]
+    if not path or not Path(path).exists():
+        abort(404)
+    return send_file(path, mimetype=mime, as_attachment=True, download_name=download_name)
+
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify({"error": "file too large (max 50 MB)"}), 413
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
