@@ -81,6 +81,11 @@ def _run_job(job_id: str, audio_path: Path, title: str, params: dict) -> None:
             minimum_note_length_ms=params.get("min_note_length_ms", 58.0),
             minimum_frequency=params.get("min_freq"),
             maximum_frequency=params.get("max_freq"),
+            min_confidence=params.get("min_confidence", 0.5),
+            merge_gap_ms=params.get("merge_gap_ms", 50.0),
+            bpm_override=params.get("bpm_override"),
+            key_override=params.get("key_override"),
+            time_signature_override=params.get("time_signature_override"),
         )
         serializable = asdict(result)
         for key in ("midi_path", "musicxml_path", "pdf_path"):
@@ -137,12 +142,23 @@ def api_transcribe():
         except ValueError:
             return default
 
+    def _str(name: str) -> Optional[str]:
+        raw = request.form.get(name)
+        if raw is None or raw.strip() == "":
+            return None
+        return raw.strip()
+
     params = {
         "onset_threshold": _float("onset_threshold", 0.5),
         "frame_threshold": _float("frame_threshold", 0.3),
         "min_note_length_ms": _float("min_note_length_ms", 58.0),
         "min_freq": _float("min_freq", None),
         "max_freq": _float("max_freq", None),
+        "min_confidence": _float("min_confidence", 0.5),
+        "merge_gap_ms": _float("merge_gap_ms", 50.0),
+        "bpm_override": _float("bpm_override", None),
+        "key_override": _str("key_override"),
+        "time_signature_override": _str("time_signature_override"),
     }
 
     jobs.create(job_id, safe_name)

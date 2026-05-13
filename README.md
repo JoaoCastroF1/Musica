@@ -82,14 +82,31 @@ Parâmetros opcionais do POST `/api/transcribe` (form-data):
 - `frame_threshold` — limiar de sustentação (0–1, default 0.3)
 - `min_note_length_ms` — duração mínima de uma nota (default 58 ms)
 - `min_freq` / `max_freq` — faixa de pitch em Hz
+- `min_confidence` — descarta notas abaixo desta confiança (0–1, default 0.5)
+- `merge_gap_ms` — funde notas adjacentes do mesmo pitch (default 50 ms)
+- `bpm_override` — força BPM em vez de detectar
+- `key_override` — força tom (`G`, `f# minor`, etc.)
+- `time_signature_override` — força compasso (`4/4`, `3/4`, `2/4`, `6/8`)
 
 ## Arquitetura
 
 ```
-audio  ─▶  Basic Pitch (CNN)  ─▶  MIDI  ─▶  music21 (quantização)  ─▶  MusicXML
-                                                   │
-                                                   ├─▶  Lilypond  ─▶  PDF
-                                                   └─▶  OpenSheetMusicDisplay (navegador)
+audio  ─▶  Basic Pitch (CNN)  ─▶  note events
+                                       │
+                                       ├─ filtra por confiança
+                                       ├─ funde fragmentos adjacentes
+                                       ▼
+                                     MIDI
+                                       │
+            librosa (BPM) ─────────────┤
+            music21 KrumhanslSchmuckler (tom) ┤
+            heurística de onsets (compasso) ──┤
+                                       ▼
+                                  music21 Score (quantizado)
+                                       │
+                                       ├─▶  MusicXML  ─▶  OSMD (navegador)
+                                       ├─▶  MIDI
+                                       └─▶  Lilypond  ─▶  PDF
 ```
 
 ## Testes
