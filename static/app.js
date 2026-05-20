@@ -11,6 +11,8 @@ const osmdContainer = document.getElementById("osmd-container");
 
 const statNotes = document.getElementById("stat-notes");
 const statTempo = document.getElementById("stat-tempo");
+const statKey = document.getElementById("stat-key");
+const statMeter = document.getElementById("stat-meter");
 const statDuration = document.getElementById("stat-duration");
 const noteList = document.getElementById("note-list");
 
@@ -116,8 +118,14 @@ async function renderResult(job) {
   show(resultCard);
 
   const result = job.result || {};
-  statNotes.textContent = result.num_notes ?? "—";
+  const totalLabel =
+    result.num_notes_raw && result.num_notes_raw !== result.num_notes
+      ? `${result.num_notes} / ${result.num_notes_raw}`
+      : (result.num_notes ?? "—");
+  statNotes.textContent = totalLabel;
   statTempo.textContent = result.tempo_bpm ? `${result.tempo_bpm} bpm` : "—";
+  statKey.textContent = result.key || "—";
+  statMeter.textContent = result.time_signature || "—";
   statDuration.textContent = result.duration_seconds
     ? `${result.duration_seconds.toFixed(1)} s`
     : "—";
@@ -141,6 +149,12 @@ function configureDownload(el, href, label) {
   el.setAttribute("download", "");
 }
 
+function confidenceColor(c) {
+  if (c >= 0.8) return "#34d399";
+  if (c >= 0.6) return "#fbbf24";
+  return "#f87171";
+}
+
 function renderNoteList(notes) {
   if (!notes.length) {
     noteList.textContent = "(nenhuma nota detectada)";
@@ -150,7 +164,9 @@ function renderNoteList(notes) {
     .slice(0, 500)
     .map((n) => {
       const dur = (n.end - n.start).toFixed(2);
-      return `<div class="note-row"><span>${n.start.toFixed(2)}s</span><span>${dur}s</span><strong>${n.pitch_name}</strong><span>v${n.velocity}</span></div>`;
+      const conf = n.confidence ?? n.velocity / 127;
+      const color = confidenceColor(conf);
+      return `<div class="note-row"><span>${n.start.toFixed(2)}s</span><span>${dur}s</span><strong style="color:${color}">${n.pitch_name}</strong><span>${conf.toFixed(2)}</span></div>`;
     })
     .join("");
   const trailing =

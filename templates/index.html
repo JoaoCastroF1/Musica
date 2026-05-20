@@ -85,12 +85,52 @@
                 />
               </label>
               <label>
+                Confiança mínima
+                <input
+                  type="number"
+                  name="min_confidence"
+                  step="0.05"
+                  min="0"
+                  max="1"
+                  value="0.5"
+                />
+                <span class="hint">descarta notas com confiança abaixo</span>
+              </label>
+              <label>
+                Fusão de fragmentos (ms)
+                <input
+                  type="number"
+                  name="merge_gap_ms"
+                  step="1"
+                  min="0"
+                  value="50"
+                />
+              </label>
+              <label>
                 Frequência mínima (Hz)
                 <input type="number" name="min_freq" step="1" placeholder="auto" />
               </label>
               <label>
                 Frequência máxima (Hz)
                 <input type="number" name="max_freq" step="1" placeholder="auto" />
+              </label>
+              <label>
+                BPM (override)
+                <input type="number" name="bpm_override" step="1" min="20" max="320" placeholder="auto" />
+              </label>
+              <label>
+                Tom (override)
+                <input type="text" name="key_override" placeholder="ex.: G ou f# minor" />
+              </label>
+              <label>
+                Compasso (override)
+                <select name="time_signature_override">
+                  <option value="">auto</option>
+                  <option value="4/4">4/4</option>
+                  <option value="3/4">3/4</option>
+                  <option value="2/4">2/4</option>
+                  <option value="6/8">6/8</option>
+                </select>
               </label>
             </div>
           </details>
@@ -113,6 +153,8 @@
           <dl class="stats">
             <div><dt>Notas</dt><dd id="stat-notes">—</dd></div>
             <div><dt>Tempo</dt><dd id="stat-tempo">—</dd></div>
+            <div><dt>Tom</dt><dd id="stat-key">—</dd></div>
+            <div><dt>Compasso</dt><dd id="stat-meter">—</dd></div>
             <div><dt>Duração</dt><dd id="stat-duration">—</dd></div>
           </dl>
         </header>
