@@ -268,6 +268,32 @@ def api_kit(job_id: str):
     return jsonify({"kit_url": f"/api/download/{job_id}/kit"})
 
 
+AUDIO_MIMETYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".aiff": "audio/aiff",
+    ".aif": "audio/aiff",
+}
+
+
+@app.route("/api/audio/<job_id>")
+def api_audio(job_id: str):
+    """Stream the preserved audio master for in-browser A/B comparison."""
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "done":
+        abort(404)
+    master = (job.get("result") or {}).get("master_path")
+    if not master or not Path(master).exists():
+        abort(404)
+    mime = AUDIO_MIMETYPES.get(Path(master).suffix.lower(), "application/octet-stream")
+    # conditional=True enables Range requests so <audio> seeking works
+    return send_file(master, mimetype=mime, as_attachment=False, conditional=True)
+
+
 @app.route("/api/download/<job_id>/<fmt>")
 def api_download(job_id: str, fmt: str):
     job = jobs.get(job_id)

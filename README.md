@@ -34,38 +34,63 @@ afinadas**. O app expõe os parâmetros do Basic Pitch e do Whisper para você
 refinar, e a letra é sempre apresentada como rascunho editável — revise antes
 de registrar.
 
-## Como usar
+## Como acessar o site
 
-### Pré-requisitos
+O app é auto-hospedado: você o roda no seu computador ou publica numa nuvem.
+Três caminhos, do mais simples ao mais completo:
 
-- Python 3.9–3.11 (Basic Pitch / TensorFlow não suportam 3.12+ ainda)
-- (opcional) [Lilypond](https://lilypond.org/) para renderização em PDF
+### Opção A — rodar no seu computador (Docker, recomendado)
 
-### Instalação
+1. Instale o [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+   (Windows/Mac) ou `docker` (Linux).
+2. No terminal:
+
+   ```bash
+   git clone https://github.com/JoaoCastroF1/Musica.git
+   cd Musica
+   docker build -t musica .
+   docker run --rm -p 5000:5000 musica
+   ```
+
+3. Abra **http://localhost:5000** no navegador. Pronto — a imagem já inclui
+   Lilypond (PDF da partitura) e ffmpeg.
+
+### Opção B — rodar com Python direto
+
+Pré-requisitos: Python 3.9–3.11 (Basic Pitch/TensorFlow ainda não suportam
+3.12+) e, opcionalmente, [Lilypond](https://lilypond.org/) para o PDF.
 
 ```bash
+git clone https://github.com/JoaoCastroF1/Musica.git
+cd Musica
 python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Servidor web
-
-```bash
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt  # demora alguns minutos (TensorFlow)
 python app.py
-# abre http://localhost:5000
+# abra http://localhost:5000
 ```
+
+### Opção C — publicar na internet de graça (Hugging Face Spaces)
+
+Para ter um **site com URL pública** sem pagar servidor:
+
+1. Crie uma conta gratuita em [huggingface.co](https://huggingface.co).
+2. Clique em **New Space** → nome (ex.: `musica`) → SDK: **Docker** →
+   visibilidade pública ou privada → Create.
+3. Envie os arquivos deste repositório para o Space (via git ou upload na
+   própria página; o `Dockerfile` já está pronto — o Space usa a porta
+   definida em `PORT` automaticamente).
+4. Aguarde o build (~10 min na primeira vez). Seu site fica em
+   `https://huggingface.co/spaces/<seu-usuario>/musica`.
+
+Dicas para o plano gratuito (2 vCPU): use o modelo Whisper `tiny` ou `base`
+para a letra, e áudios de até ~3 minutos para transcrições rápidas. Na
+primeira letra transcrita o Space baixa o modelo Whisper (fica em cache).
 
 Healthcheck: `GET /healthz` → `{"status": "ok"}`.
 
-### Docker
-
-```bash
-docker build -t musica .
-docker run --rm -p 5000:5000 musica
-```
-
-A imagem inclui Lilypond, então o PDF é gerado out-of-the-box.
+Em produção o container usa gunicorn (1 worker + threads — a fila de
+trabalhos vive na memória do processo).
 
 ### Linha de comando
 
@@ -78,7 +103,10 @@ python lyrics.py minha_musica.mp3 --model small --language pt
 
 1. **Envie o áudio** — o app gera partitura, detecta tom/tempo/compasso e
    transcreve a letra.
-2. **Revise a letra** no editor (as correções entram no kit).
+2. **Confira de ouvido** — o botão "▶ Tocar transcrição" toca as notas
+   detectadas com o cursor acompanhando a partitura; o player logo abaixo
+   toca o áudio original para comparação A/B.
+3. **Revise a letra** no editor (as correções entram no kit).
 3. **Preencha os dados** da obra (autores, CPF, percentuais, associação) e do
    fonograma (intérprete, produtor, ano/local de gravação).
 4. **Gere o kit (.zip)** e siga o guia incluído:

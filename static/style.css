@@ -450,6 +450,28 @@ select:focus {
   margin-left: 12px;
 }
 
+.player-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.player-row .btn-secondary {
+  margin-top: 0;
+}
+
+.player-row .btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#original-audio {
+  width: 100%;
+  margin-bottom: 14px;
+}
+
 footer {
   text-align: center;
   padding: 24px 20px 32px;
