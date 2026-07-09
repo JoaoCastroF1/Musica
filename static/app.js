@@ -32,6 +32,10 @@ const authorsList = document.getElementById("authors-list");
 const addAuthorBtn = document.getElementById("add-author");
 const dlKit = document.getElementById("dl-kit");
 
+const playBtn = document.getElementById("play-btn");
+const stopBtn = document.getElementById("stop-btn");
+const originalAudio = document.getElementById("original-audio");
+
 let osmd = null;
 let currentJobId = null;
 let currentResult = null;
@@ -157,8 +161,120 @@ async function renderResult(job) {
   renderNoteList(result.notes || []);
   renderLyrics(result);
   showKitCard(result);
+  setupOriginalAudio(job.id, result);
+  stopPlayback();
   await renderScore(job.id);
 }
+
+function setupOriginalAudio(jobId, result) {
+  if (result.master_path) {
+    originalAudio.src = `/api/audio/${jobId}`;
+    originalAudio.hidden = false;
+  } else {
+    originalAudio.removeAttribute("src");
+    originalAudio.hidden = true;
+  }
+}
+
+// ---- Transcription playback: a tiny WebAudio synth over the detected note
+// events, with the OSMD cursor following the score in time. ----
+
+let playback = null; // { ctx, timer, t0, duration }
+
+function midiToFreq(m) {
+  return 440 * Math.pow(2, (m - 69) / 12);
+}
+
+function stopPlayback() {
+  if (!playback) {
+    stopBtn.disabled = true;
+    playBtn.disabled = !currentResult;
+    return;
+  }
+  clearInterval(playback.timer);
+  playback.ctx.close().catch(() => {});
+  playback = null;
+  playBtn.disabled = false;
+  stopBtn.disabled = true;
+  if (osmd && osmd.cursor) {
+    try {
+      osmd.cursor.reset();
+      osmd.cursor.hide();
+    } catch (_e) {
+      /* cursor may not be initialized when rendering failed */
+    }
+  }
+}
+
+function startPlayback() {
+  const notes = (currentResult && currentResult.notes) || [];
+  if (!notes.length) return;
+
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx();
+  const t0 = ctx.currentTime + 0.15;
+  const duration = Math.max(...notes.map((n) => n.end)) + 0.5;
+
+  const master = ctx.createGain();
+  master.gain.value = 0.9;
+  master.connect(ctx.destination);
+
+  notes.forEach((n) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const vol = 0.25 * ((n.velocity || 90) / 127);
+    const start = t0 + n.start;
+    const end = t0 + Math.max(n.end, n.start + 0.05);
+
+    osc.type = "triangle";
+    osc.frequency.value = midiToFreq(n.pitch_midi);
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(vol, start + 0.015);
+    gain.gain.setValueAtTime(vol, Math.max(start + 0.015, end - 0.06));
+    gain.gain.linearRampToValueAtTime(0, end);
+    osc.connect(gain).connect(master);
+    osc.start(start);
+    osc.stop(end + 0.05);
+  });
+
+  // Cursor sync: OSMD iterator timestamps are in whole-note units;
+  // seconds-per-whole-note = 4 beats * 60 / bpm.
+  let cursorReady = false;
+  const bpm = currentResult.tempo_bpm || 120;
+  const secondsPerWhole = 240 / bpm;
+  if (osmd && osmd.cursor) {
+    try {
+      osmd.cursor.reset();
+      osmd.cursor.show();
+      cursorReady = true;
+    } catch (_e) {
+      cursorReady = false;
+    }
+  }
+
+  const timer = setInterval(() => {
+    if (!playback) return;
+    const t = ctx.currentTime - t0;
+    if (cursorReady) {
+      try {
+        const it = osmd.cursor.Iterator;
+        while (!it.EndReached && it.currentTimeStamp.RealValue * secondsPerWhole <= t) {
+          osmd.cursor.next();
+        }
+      } catch (_e) {
+        cursorReady = false;
+      }
+    }
+    if (t >= duration) stopPlayback();
+  }, 50);
+
+  playback = { ctx, timer, t0, duration };
+  playBtn.disabled = true;
+  stopBtn.disabled = false;
+}
+
+playBtn.addEventListener("click", startPlayback);
+stopBtn.addEventListener("click", stopPlayback);
 
 function renderLyrics(result) {
   if (result.lyrics && result.lyrics.text) {

@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Light deps only: the ML pipeline tests skip themselves when
+      # Basic Pitch / faster-whisper are absent (see tests/conftest.py),
+      # so CI stays fast while still covering the HTTP layer, the lyrics
+      # wrapper, and the full registration-kit generation.
+      - run: pip install flask werkzeug reportlab pytest
+      - run: pytest -q

@@ -237,3 +237,26 @@ def test_kit_download_before_generation(client):
     job_id = _make_done_job(app_module, job_id="kitjob4")
     res = c.get(f"/api/download/{job_id}/kit")
     assert res.status_code == 404
+
+
+def test_audio_master_streaming(client):
+    c, app_module = client
+    job_id = _make_done_job(app_module, job_id="audiojob")
+    res = c.get(f"/api/audio/{job_id}")
+    assert res.status_code == 200
+    assert res.mimetype == "audio/wav"
+    assert res.data.startswith(b"RIFF")
+
+
+def test_audio_unknown_job(client):
+    c, _ = client
+    assert c.get("/api/audio/nope").status_code == 404
+
+
+def test_audio_missing_master(client):
+    c, app_module = client
+    app_module.jobs.create("nomaster", "song.wav")
+    app_module.jobs.update(
+        "nomaster", status="done", result={"musicxml_path": "x"}
+    )
+    assert c.get("/api/audio/nomaster").status_code == 404

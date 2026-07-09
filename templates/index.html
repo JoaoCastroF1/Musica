@@ -180,6 +180,13 @@
           </dl>
         </header>
 
+        <div class="player-row">
+          <button type="button" id="play-btn" class="btn-secondary">▶ Tocar transcrição</button>
+          <button type="button" id="stop-btn" class="btn-secondary" disabled>⏹ Parar</button>
+          <span class="hint">o cursor acompanha a partitura — compare com o original abaixo</span>
+        </div>
+        <audio id="original-audio" controls preload="none" hidden></audio>
+
         <div id="osmd-container"></div>
 
         <div class="downloads">
