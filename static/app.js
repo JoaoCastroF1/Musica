@@ -20,7 +20,21 @@ const dlMusicXml = document.getElementById("dl-musicxml");
 const dlMidi = document.getElementById("dl-midi");
 const dlPdf = document.getElementById("dl-pdf");
 
+const lyricsCard = document.getElementById("lyrics-card");
+const lyricsText = document.getElementById("lyrics-text");
+const lyricsLang = document.getElementById("lyrics-lang");
+
+const kitCard = document.getElementById("kit-card");
+const kitForm = document.getElementById("kit-form");
+const kitStatus = document.getElementById("kit-status");
+const kitSubmit = document.getElementById("kit-submit");
+const authorsList = document.getElementById("authors-list");
+const addAuthorBtn = document.getElementById("add-author");
+const dlKit = document.getElementById("dl-kit");
+
 let osmd = null;
+let currentJobId = null;
+let currentResult = null;
 
 function show(el) {
   el.classList.remove("hidden");
@@ -118,6 +132,8 @@ async function renderResult(job) {
   show(resultCard);
 
   const result = job.result || {};
+  currentJobId = job.id;
+  currentResult = result;
   const totalLabel =
     result.num_notes_raw && result.num_notes_raw !== result.num_notes
       ? `${result.num_notes} / ${result.num_notes_raw}`
@@ -139,8 +155,164 @@ async function renderResult(job) {
   }
 
   renderNoteList(result.notes || []);
+  renderLyrics(result);
+  showKitCard(result);
   await renderScore(job.id);
 }
+
+function renderLyrics(result) {
+  if (result.lyrics && result.lyrics.text) {
+    show(lyricsCard);
+    lyricsText.value = result.lyrics.text;
+    const prob = Math.round((result.lyrics.language_probability || 0) * 100);
+    lyricsLang.textContent = `Idioma detectado: ${result.lyrics.language || "?"} (${prob}% de confiança) · modelo ${result.lyrics.model_size}`;
+    lyricsLang.classList.remove("error");
+  } else if (result.lyrics_error) {
+    show(lyricsCard);
+    lyricsText.value = "";
+    lyricsLang.textContent = `Letra não transcrita: ${result.lyrics_error}`;
+    lyricsLang.classList.add("error");
+  } else {
+    hide(lyricsCard);
+    lyricsText.value = "";
+  }
+}
+
+function showKitCard(result) {
+  show(kitCard);
+  dlKit.hidden = true;
+  kitStatus.textContent = "";
+
+  const titleInput = form.querySelector('input[name="title"]');
+  const fileName = audioInput.files && audioInput.files[0] ? audioInput.files[0].name : "";
+  const fallback = fileName.replace(/\.[^.]+$/, "");
+  const kitTitle = document.getElementById("kit-title");
+  if (!kitTitle.value) {
+    kitTitle.value = (titleInput && titleInput.value.trim()) || fallback;
+  }
+  const year = new Date().getFullYear();
+  const kitYear = document.getElementById("kit-year");
+  const kitRecYear = document.getElementById("kit-rec-year");
+  if (!kitYear.value) kitYear.value = year;
+  if (!kitRecYear.value) kitRecYear.value = year;
+
+  if (!authorsList.querySelector(".author-row")) {
+    addAuthorRow();
+  }
+}
+
+function addAuthorRow() {
+  const row = document.createElement("div");
+  row.className = "author-row";
+  row.innerHTML = `
+    <label>Nome<input type="text" data-f="name" placeholder="nome completo" /></label>
+    <label>Pseudônimo<input type="text" data-f="pseudonym" /></label>
+    <label>CPF<input type="text" data-f="cpf" placeholder="000.000.000-00" /></label>
+    <label>Função
+      <select data-f="role">
+        <option value="letra e música" selected>Letra e música</option>
+        <option value="letra">Letra</option>
+        <option value="música">Música</option>
+      </select>
+    </label>
+    <label>%<input type="number" data-f="share" min="0" max="100" step="0.5" value="100" /></label>
+    <label>Associação
+      <select data-f="association">
+        <option value="">Nenhuma</option>
+        <option value="UBC">UBC</option>
+        <option value="ABRAMUS">ABRAMUS</option>
+        <option value="AMAR">AMAR</option>
+        <option value="SBACEM">SBACEM</option>
+        <option value="SICAM">SICAM</option>
+        <option value="Outra">Outra</option>
+      </select>
+    </label>
+    <button type="button" class="remove" title="remover autor">✕</button>
+  `;
+  row.querySelector("button.remove").addEventListener("click", () => {
+    if (authorsList.querySelectorAll(".author-row").length > 1) {
+      row.remove();
+    } else {
+      row.querySelectorAll("input").forEach((i) => (i.value = i.dataset.f === "share" ? "100" : ""));
+    }
+  });
+  authorsList.appendChild(row);
+}
+
+addAuthorBtn.addEventListener("click", addAuthorRow);
+
+function collectAuthors() {
+  return [...authorsList.querySelectorAll(".author-row")]
+    .map((row) => ({
+      name: row.querySelector('[data-f="name"]').value.trim(),
+      pseudonym: row.querySelector('[data-f="pseudonym"]').value.trim(),
+      cpf: row.querySelector('[data-f="cpf"]').value.trim(),
+      role: row.querySelector('[data-f="role"]').value,
+      share_percent: parseFloat(row.querySelector('[data-f="share"]').value) || 0,
+      association: row.querySelector('[data-f="association"]').value,
+    }))
+    .filter((a) => a.name);
+}
+
+kitForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!currentJobId) return;
+
+  const authors = collectAuthors();
+  if (!authors.length) {
+    kitStatus.textContent = "Informe ao menos um autor com nome.";
+    kitStatus.classList.add("error");
+    return;
+  }
+
+  const participants = document
+    .getElementById("kit-participants")
+    .value.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, role: "participação" }));
+
+  const payload = {
+    title: document.getElementById("kit-title").value.trim(),
+    subtitle: document.getElementById("kit-subtitle").value.trim(),
+    genre: document.getElementById("kit-genre").value.trim(),
+    language: document.getElementById("kit-language").value.trim() || "pt",
+    year: parseInt(document.getElementById("kit-year").value, 10) || null,
+    lyrics: lyricsText.value,
+    authors,
+    main_performer: document.getElementById("kit-performer").value.trim(),
+    performers: participants,
+    producer: document.getElementById("kit-producer").value.trim(),
+    recording_year: parseInt(document.getElementById("kit-rec-year").value, 10) || null,
+    recording_location: document.getElementById("kit-rec-location").value.trim(),
+    isrc: document.getElementById("kit-isrc").value.trim(),
+    duration_seconds: currentResult ? currentResult.duration_seconds : null,
+  };
+
+  kitSubmit.disabled = true;
+  kitStatus.classList.remove("error");
+  kitStatus.textContent = "Gerando kit…";
+  dlKit.hidden = true;
+
+  try {
+    const res = await fetch(`/api/kit/${currentJobId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    dlKit.href = json.kit_url;
+    dlKit.hidden = false;
+    dlKit.setAttribute("download", "");
+    kitStatus.textContent = "Kit pronto — bom registro!";
+  } catch (err) {
+    kitStatus.textContent = "Erro: " + err.message;
+    kitStatus.classList.add("error");
+  } finally {
+    kitSubmit.disabled = false;
+  }
+});
 
 function configureDownload(el, href, label) {
   el.href = href;

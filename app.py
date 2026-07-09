@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import shutil
 import threading
 import time
 from dataclasses import asdict
@@ -14,6 +15,7 @@ from typing import Optional
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
+import registration
 from transcribe import TranscriptionResult, transcribe_audio
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -68,11 +70,44 @@ def _allowed(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _transcribe_lyrics_step(job_id: str, master_path: Path, params: dict) -> dict:
+    """Run the optional lyrics pass; failures never abort the whole job."""
+    try:
+        from lyrics import transcribe_lyrics
+    except Exception as exc:  # noqa: BLE001 — import error means dep missing
+        return {"lyrics_error": f"transcrição de letra indisponível: {exc}"}
+    try:
+        lr = transcribe_lyrics(
+            master_path,
+            model_size=params.get("whisper_model") or "small",
+            language=params.get("lyrics_language"),
+        )
+        return {
+            "lyrics": {
+                "text": lr.text,
+                "language": lr.language,
+                "language_probability": lr.language_probability,
+                "segments": lr.segments,
+                "model_size": lr.model_size,
+            }
+        }
+    except Exception as exc:  # noqa: BLE001 — surface as warning, not job failure
+        log.warning("job %s lyrics failed: %s", job_id, exc)
+        return {"lyrics_error": str(exc)}
+
+
 def _run_job(job_id: str, audio_path: Path, title: str, params: dict) -> None:
     jobs.update(job_id, status="running")
     try:
+        # Keep a master copy in output/ — the kit embeds it as the fonogram
+        # evidence, and lyrics transcription reads from it after the upload
+        # is deleted.
+        master_path = OUTPUT_DIR / f"{job_id}_master{audio_path.suffix.lower()}"
+        shutil.copy2(audio_path, master_path)
+        audio_sha256 = registration.sha256_of(master_path)
+
         result: TranscriptionResult = transcribe_audio(
-            audio_path,
+            master_path,
             OUTPUT_DIR,
             job_id=job_id,
             title=title,
@@ -91,6 +126,12 @@ def _run_job(job_id: str, audio_path: Path, title: str, params: dict) -> None:
         for key in ("midi_path", "musicxml_path", "pdf_path"):
             if serializable.get(key) is not None:
                 serializable[key] = str(serializable[key])
+        serializable["audio_sha256"] = audio_sha256
+        serializable["master_path"] = str(master_path)
+
+        if params.get("transcribe_lyrics"):
+            serializable.update(_transcribe_lyrics_step(job_id, master_path, params))
+
         jobs.update(job_id, status="done", result=serializable)
         log.info("job %s done: %d notes", job_id, result.num_notes)
     except Exception as exc:  # noqa: BLE001 — surface any failure to the user
@@ -148,6 +189,9 @@ def api_transcribe():
             return None
         return raw.strip()
 
+    def _bool(name: str) -> bool:
+        return (request.form.get(name) or "").strip().lower() in ("on", "true", "1")
+
     params = {
         "onset_threshold": _float("onset_threshold", 0.5),
         "frame_threshold": _float("frame_threshold", 0.3),
@@ -159,6 +203,9 @@ def api_transcribe():
         "bpm_override": _float("bpm_override", None),
         "key_override": _str("key_override"),
         "time_signature_override": _str("time_signature_override"),
+        "transcribe_lyrics": _bool("transcribe_lyrics"),
+        "whisper_model": _str("whisper_model") or "small",
+        "lyrics_language": _str("lyrics_language"),
     }
 
     jobs.create(job_id, safe_name)
@@ -177,12 +224,68 @@ def api_job(job_id: str):
     return jsonify(job)
 
 
+@app.route("/api/kit/<job_id>", methods=["POST"])
+def api_kit(job_id: str):
+    """Build the registration kit ZIP from the transcription artifacts."""
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "unknown job"}), 404
+    if job.get("status") != "done":
+        return jsonify({"error": "a transcrição ainda não foi concluída"}), 409
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "corpo JSON ausente ou inválido"}), 400
+
+    result = job.get("result") or {}
+    if not data.get("duration_seconds"):
+        data["duration_seconds"] = result.get("duration_seconds")
+
+    try:
+        work, phonogram = registration.from_form(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    artifacts = {
+        "midi": result.get("midi_path"),
+        "musicxml": result.get("musicxml_path"),
+        "pdf": result.get("pdf_path"),
+    }
+    try:
+        kit_path = registration.build_registration_kit(
+            OUTPUT_DIR,
+            job_id,
+            work,
+            phonogram,
+            artifacts,
+            audio_path=result.get("master_path"),
+        )
+    except Exception as exc:  # noqa: BLE001 — missing reportlab, IO errors, etc.
+        log.exception("kit %s failed", job_id)
+        return jsonify({"error": f"falha ao gerar o kit: {exc}"}), 500
+
+    jobs.update(job_id, kit_path=str(kit_path))
+    return jsonify({"kit_url": f"/api/download/{job_id}/kit"})
+
+
 @app.route("/api/download/<job_id>/<fmt>")
 def api_download(job_id: str, fmt: str):
     job = jobs.get(job_id)
     if not job or job.get("status") != "done":
         abort(404)
     result = job.get("result") or {}
+
+    # The kit path lives on the job dict (written by api_kit), not in result.
+    if fmt == "kit":
+        path = job.get("kit_path")
+        if not path or not Path(path).exists():
+            abort(404)
+        return send_file(
+            path,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"{job_id}_kit.zip",
+        )
 
     mapping = {
         "midi": (result.get("midi_path"), "audio/midi", f"{job_id}.mid"),

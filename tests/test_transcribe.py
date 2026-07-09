@@ -18,9 +18,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def _skip_if_deps_missing():
     """Skip the whole module if Basic Pitch / TF isn't installed locally."""
     try:
-        import transcribe  # noqa: F401
+        import transcribe
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"transcribe module not importable: {exc}", allow_module_level=False)
+    if getattr(transcribe, "__musica_stub__", False):
+        pytest.skip("heavy transcription deps not installed (conftest stub active)")
 
 
 def test_postprocess_drops_low_confidence():
