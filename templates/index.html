@@ -43,12 +43,33 @@
             </span>
           </label>
 
+          <label class="checkbox-row">
+            <input type="checkbox" name="transcribe_lyrics" checked />
+            <span>
+              Transcrever letra (vocal) com Whisper
+              <span class="hint">gera um rascunho editável da letra para o registro</span>
+            </span>
+          </label>
+
           <details class="advanced">
             <summary>Parâmetros avançados</summary>
             <div class="grid">
               <label>
                 Título
                 <input type="text" name="title" placeholder="Minha música" />
+              </label>
+              <label>
+                Modelo Whisper (letra)
+                <select name="whisper_model">
+                  <option value="tiny">tiny — mais rápido</option>
+                  <option value="base">base</option>
+                  <option value="small" selected>small — recomendado</option>
+                  <option value="medium">medium — mais preciso</option>
+                </select>
+              </label>
+              <label>
+                Idioma da letra
+                <input type="text" name="lyrics_language" placeholder="pt (vazio = detectar)" />
               </label>
               <label>
                 Limiar de onset
@@ -170,6 +191,129 @@
         <details>
           <summary>Ver lista de notas detectadas</summary>
           <div class="note-list" id="note-list"></div>
+        </details>
+      </section>
+
+      <section class="card hidden" id="lyrics-card">
+        <h2>4. Letra transcrita</h2>
+        <p class="hint">
+          A letra abaixo é um rascunho gerado por IA — revise e corrija antes
+          de usá-la no registro. Suas edições entram no kit.
+        </p>
+        <textarea id="lyrics-text" rows="10" spellcheck="true"></textarea>
+        <span id="lyrics-lang" class="hint"></span>
+      </section>
+
+      <section class="card hidden" id="kit-card">
+        <h2>5. Kit de registro (direitos autorais e royalties)</h2>
+        <p class="hint">
+          Gera um .zip com dossiê em PDF, letra, partitura, áudio master,
+          hashes de integridade e metadados prontos para: Biblioteca Nacional
+          (EDA), sua associação (UBC, ABRAMUS…), ECAD e solicitação de ISRC.
+        </p>
+
+        <form id="kit-form">
+          <h3>Obra</h3>
+          <div class="grid">
+            <label>
+              Título *
+              <input type="text" id="kit-title" required />
+            </label>
+            <label>
+              Subtítulo
+              <input type="text" id="kit-subtitle" />
+            </label>
+            <label>
+              Gênero
+              <input type="text" id="kit-genre" placeholder="MPB, rock, gospel…" />
+            </label>
+            <label>
+              Idioma
+              <input type="text" id="kit-language" value="pt" />
+            </label>
+            <label>
+              Ano de composição
+              <input type="number" id="kit-year" min="1900" max="2100" />
+            </label>
+          </div>
+
+          <h3>Autores</h3>
+          <div id="authors-list"></div>
+          <button type="button" id="add-author" class="btn-secondary">
+            + adicionar autor
+          </button>
+
+          <h3>Fonograma (a gravação)</h3>
+          <div class="grid">
+            <label>
+              Intérprete principal
+              <input type="text" id="kit-performer" />
+            </label>
+            <label>
+              Demais participantes
+              <input type="text" id="kit-participants" placeholder="separados por vírgula" />
+            </label>
+            <label>
+              Produtor fonográfico
+              <input type="text" id="kit-producer" />
+            </label>
+            <label>
+              Ano de gravação
+              <input type="number" id="kit-rec-year" min="1900" max="2100" />
+            </label>
+            <label>
+              Local de gravação
+              <input type="text" id="kit-rec-location" placeholder="cidade/UF" />
+            </label>
+            <label>
+              ISRC
+              <input type="text" id="kit-isrc" placeholder="deixe vazio para solicitar depois" />
+            </label>
+          </div>
+
+          <button type="submit" id="kit-submit">Gerar kit de registro (.zip)</button>
+          <span id="kit-status" class="hint"></span>
+        </form>
+
+        <div class="downloads">
+          <a id="dl-kit" class="btn" hidden>Baixar kit (.zip)</a>
+        </div>
+
+        <details class="advanced">
+          <summary>Como registrar e receber royalties (passo a passo)</summary>
+          <ol class="guide">
+            <li>
+              <strong>Biblioteca Nacional (EDA)</strong> — registre a obra
+              (letra + partitura deste kit) no Escritório de Direitos Autorais
+              via gov.br: requerimento + GRU + cópia da obra. O registro é
+              declaratório e prova anterioridade.
+            </li>
+            <li>
+              <strong>Associação de gestão coletiva</strong> — filie-se à UBC,
+              ABRAMUS, AMAR, SBACEM ou SICAM e cadastre a <em>obra</em>
+              (autores e percentuais) e o <em>fonograma</em> (intérprete,
+              produtor, ISRC). Use os dados do dossiê.
+            </li>
+            <li>
+              <strong>ECAD</strong> — não atende titulares diretamente; os
+              cadastros da sua associação alimentam o ECAD, que arrecada a
+              execução pública (rádio, TV, shows, streaming) e repassa via
+              associação.
+            </li>
+            <li>
+              <strong>ISRC</strong> — código internacional do fonograma,
+              solicitado pela associação ou produtor. Necessário para rastrear
+              execuções da gravação.
+            </li>
+            <li>
+              <strong>Distribuição digital</strong> — para Spotify/Deezer/Apple
+              Music, use uma distribuidora e informe o mesmo ISRC.
+            </li>
+          </ol>
+          <p class="hint">
+            Este kit organiza informações e evidências técnicas. Ele não
+            substitui o registro oficial nem constitui aconselhamento jurídico.
+          </p>
         </details>
       </section>
     </main>

@@ -151,3 +151,89 @@ def test_invalid_format(client):
     )
     res = c.get("/api/download/abc/bogus")
     assert res.status_code == 400
+
+
+def _make_done_job(app_module, job_id="kitjob"):
+    master = app_module.OUTPUT_DIR / f"{job_id}_master.wav"
+    master.write_bytes(b"RIFF" + b"\0" * 32)
+    xml = app_module.OUTPUT_DIR / f"{job_id}.musicxml"
+    xml.write_text("<score-partwise/>", encoding="utf-8")
+    app_module.jobs.create(job_id, "song.wav")
+    app_module.jobs.update(
+        job_id,
+        status="done",
+        result={
+            "midi_path": None,
+            "musicxml_path": str(xml),
+            "pdf_path": None,
+            "duration_seconds": 12.3,
+            "master_path": str(master),
+            "audio_sha256": "deadbeef",
+        },
+    )
+    return job_id
+
+
+def test_kit_endpoint_happy_path(client):
+    c, app_module = client
+    job_id = _make_done_job(app_module)
+
+    fake_zip = app_module.OUTPUT_DIR / f"{job_id}_kit.zip"
+
+    def fake_build(output_dir, jid, work, phonogram, artifacts, audio_path=None):
+        assert work.title == "Minha Canção"
+        assert phonogram.duration_seconds == 12.3  # fell back to job result
+        fake_zip.write_bytes(b"PK\x03\x04fakezip")
+        return fake_zip
+
+    with patch.object(
+        app_module.registration, "build_registration_kit", side_effect=fake_build
+    ):
+        res = c.post(
+            f"/api/kit/{job_id}",
+            json={
+                "title": "Minha Canção",
+                "authors": [{"name": "João Castro", "share_percent": 100}],
+            },
+        )
+        assert res.status_code == 200, res.get_json()
+        kit_url = res.get_json()["kit_url"]
+
+    dl = c.get(kit_url)
+    assert dl.status_code == 200
+    assert dl.data.startswith(b"PK")
+
+
+def test_kit_unknown_job(client):
+    c, _ = client
+    res = c.post("/api/kit/nope", json={"title": "x", "authors": [{"name": "a"}]})
+    assert res.status_code == 404
+
+
+def test_kit_job_not_done(client):
+    c, app_module = client
+    app_module.jobs.create("pending1", "song.wav")
+    res = c.post("/api/kit/pending1", json={"title": "x", "authors": [{"name": "a"}]})
+    assert res.status_code == 409
+
+
+def test_kit_requires_title(client):
+    c, app_module = client
+    job_id = _make_done_job(app_module, job_id="kitjob2")
+    res = c.post(f"/api/kit/{job_id}", json={"authors": [{"name": "a"}]})
+    assert res.status_code == 400
+    assert "título" in res.get_json()["error"]
+
+
+def test_kit_requires_json_body(client):
+    c, app_module = client
+    job_id = _make_done_job(app_module, job_id="kitjob3")
+    res = c.post(f"/api/kit/{job_id}", data="not json", content_type="text/plain")
+    assert res.status_code == 400
+
+
+def test_kit_download_before_generation(client):
+    c, app_module = client
+    job_id = _make_done_job(app_module, job_id="kitjob4")
+    res = c.get(f"/api/download/{job_id}/kit")
+    assert res.status_code == 404
