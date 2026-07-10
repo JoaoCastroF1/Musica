@@ -54,29 +54,67 @@ class TranscriptionResult:
     num_notes_raw: int = 0
 
 
-def _detect_tempo(audio_path: Path) -> float:
-    """Estimate tempo (BPM) from the raw audio with librosa's beat tracker."""
+def _detect_tempo(audio_path: Path) -> Optional[float]:
+    """Estimate tempo (BPM) from the raw audio with librosa's beat tracker.
+
+    Returns None when the tracker fails or produces a degenerate value, so
+    the caller can fall back to note-onset statistics.
+    """
     try:
         y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
-        tempo, _beats = librosa.beat.beat_track(y=y, sr=sr)
+        tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
         bpm = float(np.atleast_1d(tempo)[0])
-        if not np.isfinite(bpm) or bpm <= 0:
-            return 120.0
+        if not np.isfinite(bpm) or bpm <= 0 or len(np.atleast_1d(beats)) < 4:
+            return None
         return bpm
     except Exception as exc:  # noqa: BLE001 — librosa errors vary by codec
         logger.warning("librosa tempo detection failed: %s", exc)
-        return 120.0
+        return None
+
+
+def _tempo_from_onsets(note_events: list[tuple]) -> Optional[float]:
+    """Estimate BPM from the median inter-onset interval of the notes.
+
+    Works well for solo/monophonic material with a steady pulse, where
+    audio-domain beat tracking often fails (sparse pure tones, rubato
+    intros). Returns None when there aren't enough onsets or the intervals
+    are too irregular to trust.
+    """
+    onsets = sorted({round(float(ev[0]), 4) for ev in note_events})
+    if len(onsets) < 4:
+        return None
+    intervals = np.diff(onsets)
+    intervals = intervals[intervals > 0.05]
+    if len(intervals) < 3:
+        return None
+    median = float(np.median(intervals))
+    spread = float(np.median(np.abs(intervals - median)))
+    if median <= 0 or spread / median > 0.35:
+        return None
+    bpm = 60.0 / median
+    # Fold into the conventional 40-220 range (an IOI of eighth notes reads
+    # as double-time, whole measures as half-time).
+    while bpm > 220:
+        bpm /= 2
+    while bpm < 40:
+        bpm *= 2
+    return bpm
 
 
 def _detect_key(score: stream.Score) -> m21_key.Key:
-    """Estimate the score's key using music21's Krumhansl-Schmuckler analyzer."""
-    try:
-        analyzer = analysis.discrete.KrumhanslSchmuckler()
-        result = analyzer.getSolution(score)
-        if isinstance(result, m21_key.Key):
-            return result
-    except Exception as exc:  # noqa: BLE001 — music21 raises various types
-        logger.warning("key detection failed: %s", exc)
+    """Estimate the score's key using music21's Krumhansl-Schmuckler analyzer.
+
+    Runs on the flattened stream — the analyzer can choke on nested
+    Score/Part containers ("failed to get likely keys for Stream component")
+    that the quantized MIDI parse produces.
+    """
+    for candidate in (score.flatten(), score):
+        try:
+            result = candidate.analyze("key")
+            if isinstance(result, m21_key.Key):
+                return result
+        except Exception as exc:  # noqa: BLE001 — music21 raises various types
+            logger.warning("key detection failed on %s: %s", type(candidate), exc)
     return m21_key.Key("C")
 
 
@@ -94,21 +132,44 @@ def _detect_meter(note_events: list[tuple], bpm: float) -> str:
     onsets_beats = onsets_sec * (bpm / 60.0)
 
     def peakiness(period: int) -> float:
+        """Peak concentration of onsets modulo `period`, normalized so a
+        uniform beat grid scores ~1.0 for every period (raw peak fraction
+        scales as 1/period, which would always favor short periods)."""
         mod = onsets_beats % period
         hist, _ = np.histogram(mod, bins=period * 4, range=(0, period))
         if hist.sum() == 0:
             return 0.0
-        return float(hist.max() / hist.sum())
+        return float(hist.max() / hist.sum()) * period
 
     scores = {
         "4/4": peakiness(4),
         "3/4": peakiness(3),
         "2/4": peakiness(2),
     }
+    # 4/4 is by far the most common meter; only leave it when another
+    # grouping shows real periodic emphasis (score well above the ~1.0 of a
+    # uniform grid) AND clearly beats the 4/4 reading.
     best, best_score = max(scores.items(), key=lambda kv: kv[1])
-    if best_score < 0.35:
+    if best_score < 1.4 or best_score <= scores["4/4"] * 1.15:
         return "4/4"
     return best
+
+
+def _normalize_confidences(note_events: list[tuple]) -> list[tuple]:
+    """Return events with the 4th field normalized to confidence in [0, 1].
+
+    basic_pitch.predict() emits amplitude floats in [0, 1], while MIDI-derived
+    event lists (and our tests) carry velocities in [0, 127]. Detect the scale
+    from the data and normalize so downstream filtering sees confidences.
+    """
+    if not note_events:
+        return []
+    max_val = max(float(ev[3]) for ev in note_events)
+    scale = 127.0 if max_val > 1.0 else 1.0
+    return [
+        (ev[0], ev[1], ev[2], min(1.0, float(ev[3]) / scale), ev[4])
+        for ev in note_events
+    ]
 
 
 def _postprocess_note_events(
@@ -118,26 +179,28 @@ def _postprocess_note_events(
 ) -> list[tuple]:
     """Drop low-confidence notes and merge fragments of the same pitch.
 
-    Basic Pitch encodes its per-note confidence as the MIDI velocity (0-127),
-    so we treat ``velocity / 127`` as confidence. Notes below the threshold
-    are dropped; adjacent same-pitch notes separated by a gap smaller than
-    ``merge_gap_seconds`` are merged into a single sustained note.
+    Events are normalized first (see _normalize_confidences), then notes
+    below ``min_confidence`` are dropped and adjacent same-pitch notes
+    separated by a gap smaller than ``merge_gap_seconds`` are merged into a
+    single sustained note. Returned events carry confidence in [0, 1] as
+    their 4th field.
     """
-    threshold = min_confidence * 127.0
-    filtered = [ev for ev in note_events if ev[3] >= threshold]
+    filtered = [
+        ev for ev in _normalize_confidences(note_events) if ev[3] >= min_confidence
+    ]
     filtered.sort(key=lambda ev: (ev[2], ev[0]))
 
     merged: list[tuple] = []
     for ev in filtered:
-        start, end, pitch, velocity, bends = ev
+        start, end, pitch, confidence, bends = ev
         if merged:
-            p_start, p_end, p_pitch, p_vel, p_bends = merged[-1]
+            p_start, p_end, p_pitch, p_conf, p_bends = merged[-1]
             if p_pitch == pitch and start - p_end <= merge_gap_seconds:
                 merged[-1] = (
                     p_start,
                     max(p_end, end),
                     p_pitch,
-                    int(max(p_vel, velocity)),
+                    max(p_conf, confidence),
                     p_bends,
                 )
                 continue
@@ -147,17 +210,24 @@ def _postprocess_note_events(
 
 
 def _rebuild_midi(
-    note_events: list[tuple], program: int = 0
+    note_events: list[tuple], program: int = 0, initial_tempo: float = 120.0
 ) -> pretty_midi.PrettyMIDI:
-    """Build a fresh PrettyMIDI object from a post-processed event list."""
-    midi = pretty_midi.PrettyMIDI()
+    """Build a fresh PrettyMIDI object from a post-processed event list.
+
+    Expects confidence in [0, 1] as the 4th field (see
+    _postprocess_note_events) and maps it onto MIDI velocity.
+    ``initial_tempo`` must be the detected BPM: music21 quantizes the parsed
+    MIDI against its tempo track, so writing the wrong tempo turns clean
+    quarter notes into tuplet soup.
+    """
+    midi = pretty_midi.PrettyMIDI(initial_tempo=float(initial_tempo))
     inst = pretty_midi.Instrument(program=program)
-    for start, end, pitch, velocity, _bends in note_events:
+    for start, end, pitch, confidence, _bends in note_events:
         if end <= start:
             continue
         inst.notes.append(
             pretty_midi.Note(
-                velocity=int(np.clip(velocity, 1, 127)),
+                velocity=int(np.clip(round(confidence * 127), 1, 127)),
                 pitch=int(pitch),
                 start=float(start),
                 end=float(end),
@@ -274,8 +344,8 @@ def transcribe_audio(
     minimum_frequency, maximum_frequency:
         Optional pitch band to restrict predictions to (Hz).
     min_confidence:
-        Drop notes whose Basic Pitch velocity is below ``min_confidence``
-        of the maximum (0.0 keeps everything).
+        Drop notes whose Basic Pitch amplitude/confidence (0-1) is below
+        this threshold (0.0 keeps everything).
     merge_gap_ms:
         Merge adjacent same-pitch notes separated by less than this gap.
     bpm_override, key_override, time_signature_override:
@@ -311,11 +381,37 @@ def transcribe_audio(
         merge_gap_seconds=merge_gap_ms / 1000.0,
     )
 
-    midi_data = _rebuild_midi(note_events)
+    # Tempo must be known BEFORE the MIDI is written: music21 quantizes the
+    # parsed MIDI against its embedded tempo track.
+    if bpm_override:
+        bpm = float(bpm_override)
+    else:
+        bpm_audio = _detect_tempo(audio_path)
+        bpm_onsets = _tempo_from_onsets(note_events)
+        bpm = bpm_audio or bpm_onsets or 120.0
+        # A steady onset grid that strongly disagrees with the audio-domain
+        # tracker usually means the tracker locked onto the wrong pulse
+        # (common on solo/sparse material) — trust the onsets then.
+        if (
+            bpm_audio
+            and bpm_onsets
+            and abs(bpm_audio - bpm_onsets) / bpm_onsets > 0.25
+        ):
+            logger.info(
+                "tempo: onset grid says %.1f bpm, beat tracker %.1f — using onsets",
+                bpm_onsets,
+                bpm_audio,
+            )
+            bpm = bpm_onsets
+
+    # Round for the tempo track/metronome mark — fractional BPM is noise at
+    # notation level and reads badly on the printed score.
+    bpm = float(round(bpm))
+
+    midi_data = _rebuild_midi(note_events, initial_tempo=bpm)
     midi_path = output_dir / f"{job_id}.mid"
     midi_data.write(str(midi_path))
 
-    bpm = bpm_override if bpm_override else _detect_tempo(audio_path)
     duration = float(midi_data.get_end_time())
 
     time_signature = (
@@ -337,10 +433,10 @@ def transcribe_audio(
             "end": round(end, 4),
             "pitch_midi": int(pitch),
             "pitch_name": pretty_midi.note_number_to_name(int(pitch)),
-            "velocity": int(velocity),
-            "confidence": round(min(1.0, float(velocity) / 127.0), 3),
+            "velocity": int(np.clip(round(confidence * 127), 1, 127)),
+            "confidence": round(float(confidence), 3),
         }
-        for (start, end, pitch, velocity, _pitch_bends) in note_events
+        for (start, end, pitch, confidence, _pitch_bends) in note_events
     ]
 
     score = _midi_to_score(
