@@ -81,10 +81,21 @@ def test_detect_meter_prefers_triple_for_waltz():
     events = []
     for measure in range(8):
         base = measure * 3 * spb
+        # waltz texture: bass + chord double the downbeat, single onsets on
+        # beats 2 and 3 — the periodic emphasis is what marks the meter
+        events.append((base, base + spb, 48, 100, None))
         for beat in range(3):
             events.append((base + beat * spb, base + (beat + 1) * spb, 60, 100, None))
     meter = _detect_meter(events, bpm=bpm)
     assert meter in ("3/4", "6/8")
+
+
+def test_detect_meter_uniform_grid_defaults_to_44():
+    from transcribe import _detect_meter
+
+    # onsets on every beat carry no meter information — must default to 4/4
+    events = [(i * 0.5, i * 0.5 + 0.4, 60, 100, None) for i in range(24)]
+    assert _detect_meter(events, bpm=120.0) == "4/4"
 
 
 def test_rebuild_midi_skips_zero_length_notes():
@@ -102,8 +113,37 @@ def test_rebuild_midi_skips_zero_length_notes():
 def test_detect_tempo_handles_missing_file(tmp_path):
     from transcribe import _detect_tempo
 
-    bpm = _detect_tempo(tmp_path / "nonexistent.wav")
-    assert bpm == 120.0
+    # None signals failure — the caller falls back to onset statistics
+    assert _detect_tempo(tmp_path / "nonexistent.wav") is None
+
+
+def test_tempo_from_onsets_steady_grid():
+    from transcribe import _tempo_from_onsets
+
+    events = [(i * 0.6, i * 0.6 + 0.5, 60, 0.9, None) for i in range(8)]
+    bpm = _tempo_from_onsets(events)
+    assert bpm == pytest.approx(100.0, rel=0.02)
+
+
+def test_tempo_from_onsets_rejects_irregular():
+    from transcribe import _tempo_from_onsets
+
+    starts = [0.0, 0.31, 1.9, 2.02, 3.7, 3.75]
+    events = [(s, s + 0.1, 60, 0.9, None) for s in starts]
+    assert _tempo_from_onsets(events) is None
+
+
+def test_postprocess_amplitude_scale_events():
+    """basic_pitch emits amplitudes in [0,1] — the filter must handle both."""
+    from transcribe import _postprocess_note_events
+
+    events = [
+        (0.0, 0.5, 60, 0.9, None),
+        (0.5, 1.0, 62, 0.2, None),  # low confidence, dropped
+    ]
+    out = _postprocess_note_events(events, min_confidence=0.4, merge_gap_seconds=0.0)
+    assert [ev[2] for ev in out] == [60]
+    assert out[0][3] == pytest.approx(0.9)
 
 
 def test_detect_key_falls_back_to_c_on_empty_score():
